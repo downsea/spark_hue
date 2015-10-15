@@ -1,30 +1,42 @@
-FROM jamesdbloom/docker-java8-maven
-RUN apt-get update
-ENV DEBIAN_FRONTEND noninteractive
-RUN apt-get install -q -y gcc g++ automake autoconf libtool make
-RUN apt-get install -q -y libkrb5-dev
-RUN apt-get install -q -y libldap2-dev
-RUN apt-get install -q -y libmysqlclient-dev
-RUN apt-get install -q -y libsasl2-dev
-RUN apt-get install -q -y libsasl2-modules-gssapi-mit
-RUN apt-get install -q -y libsqlite3-dev
-RUN apt-get install -q -y libssl-dev
-RUN apt-get install -q -y libtidy-0.99-0
-RUN apt-get install -q -y libxml2-dev
-RUN apt-get install -q -y libxslt-dev
-RUN apt-get install -q -y libgmp3-dev
-RUN apt-get install -q -y mysql-server
-RUN apt-get install -q -y python-dev
-RUN apt-get install -q -y python-setuptools
-RUN apt-get install -q -y python-simplejson
-RUN ln -s /usr/lib/python2.7/plat-*/_sysconfigdata_nd.py /usr/lib/python2.7/
+FROM sequenceiq/hadoop-docker:2.6.0
+MAINTAINER Qiao, Nan
 
-WORKDIR /home/docker
-RUN wget https://dl.dropboxusercontent.com/u/730827/hue/releases/3.9.0/hue-3.9.0.tgz /home/docker/
-RUN wget http://d3kbcqa49mib13.cloudfront.net/spark-1.5.1-bin-hadoop2.6.tgz /home/docker/
+# install dependencies
+RUN yum update; \
+yum install -y ant asciidoc cyrus-sasl-devel cyrus-sasl-gssapi gcc gcc-c++ krb5-devel libtidy  libxml2-devel libxslt-devel make mysql mysql-devel openldap-devel python-devel sqlite-devel openssl-devel gmp-devel \
+java-1.8.0-openjdk java-1.8.0-openjdk-devel wget; 
+ENV JAVA_HOME /etc/alternatives/java_sdk_1.8.0
+ENV PATH $JAVA_HOME/bin:$PATH
+RUN wget http://repos.fedorapeople.org/repos/dchen/apache-maven/epel-apache-maven.repo -O /etc/yum.repos.d/epel-apache-maven.repo; \
+yum install apache-maven; \
+yum clean all 
 
-RUN cd /home/docker/hue-3.9.0 && PREFIX=/home/docker make install
-ENV PATH="/home/docker/spark-1.5.1-bin-hadoop2.6/bin:/home/docker/hue-3.9.0/build/env/bin:$PATH"
+# install spark
+RUN wget http://d3kbcqa49mib13.cloudfront.net/spark-1.5.1-bin-hadoop2.6.tgz /usr/local/
+RUN cd /usr/local && ln -s spark-1.5.1-bin-hadoop2.6 spark
+ENV SPARK_HOME /usr/local/spark
+RUN mkdir $SPARK_HOME/yarn-remote-client
+ADD docker_files/yarn-remote-client $SPARK_HOME/yarn-remote-client
+ENV YARN_CONF_DIR $HADOOP_PREFIX/etc/hadoop
+ENV PATH $PATH:$SPARK_HOME/bin:$HADOOP_PREFIX/bin
+COPY docker_files/bootstrap.sh /etc/bootstrap.sh
+RUN chown root.root /etc/bootstrap.sh
+RUN chmod 700 /etc/bootstrap.sh
 
-EXPOSE 8888
-CMD ["/bin/bash"]
+# install hue
+RUN wget https://dl.dropboxusercontent.com/u/730827/hue/releases/3.9.0/hue-3.9.0.tgz /usr/local/
+RUN cd /usr/local/hue-3.9.0 && PREFIX=/usr/local make install
+ENV HUE_HOME /usr/local/hue
+ENV PATH $PATH:HUE_HOME/build/env/bin
+
+WORKDIR /home/bigdata
+# Expose HDFS/Hadoop ports
+EXPOSE 50020 50090 50070 50010 8020
+# Expose Apache Spark ports
+EXPOSE 18080 18081 7077
+# Expose Hue
+EXPOSE 8088 8042 8888
+RUN $BOOTSTRAP && $HADOOP_PREFIX/bin/hadoop dfsadmin -safemode leave && $HADOOP_PREFIX/bin/hdfs dfs -put $SPARK_HOME-1.5.1-bin-hadoop2.6/lib /spark
+RUN ["hue", "livy_server"]
+RUN ["hue", "runserver", "0.0.0.0:8888"]
+ENTRYPOINT ["/etc/bootstrap.sh"]
